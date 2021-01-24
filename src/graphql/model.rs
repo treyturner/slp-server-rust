@@ -103,7 +103,7 @@ impl Subscription {
     }
 }
 
-type RootSchema = Schema<Query, EmptyMutation, Subscription>;
+pub type RootSchema = Schema<Query, EmptyMutation, Subscription>;
 
 pub fn schema(ctx: &Ctx) -> RootSchema {
     Schema::build(Query, EmptyMutation, Subscription)

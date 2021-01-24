@@ -5,8 +5,11 @@ use super::{
 use super::{packet_stream, PacketReceiver, PacketSender};
 use crate::util::{create_socket, FilterSameExt};
 use async_graphql::SimpleObject;
-use futures::prelude::*;
-use futures::stream::{BoxStream, StreamExt};
+use async_stream::stream;
+use futures::{
+    future,
+    stream::{self, BoxStream, StreamExt},
+};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -14,12 +17,12 @@ use std::sync::Arc;
 use tokio::io::Result;
 use tokio::net::UdpSocket;
 use tokio::sync::{broadcast, mpsc, Mutex};
+use tokio_stream::wrappers::ReceiverStream;
 
 type ServerInfoStream = BoxStream<'static, ServerInfo>;
 
 /// Infomation about this server
-#[SimpleObject]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(SimpleObject, Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ServerInfo {
     /// The number of online clients
     online: i32,
@@ -108,7 +111,7 @@ impl UDPServer {
         event_recv: mpsc::Receiver<Event>,
         peer_manager: &PeerManager,
     ) {
-        event_recv
+        ReceiverStream::new(event_recv)
             .for_each_concurrent(4, |event| {
                 let inner = inner.clone();
                 let peer_manager = peer_manager.clone();
@@ -157,7 +160,7 @@ impl UDPServer {
         peer_manager: &PeerManager,
         event_send: &mpsc::Sender<Event>,
     ) {
-        packet_rx
+        ReceiverStream::new(packet_rx)
             .for_each_concurrent(10, |in_packet| {
                 let inner = inner.clone();
                 let peer_manager = peer_manager.clone();
@@ -167,7 +170,7 @@ impl UDPServer {
                     let addr = *in_packet.addr();
                     for (_, p) in &mut inner.lock().await.plugin {
                         if p.in_packet(&in_packet).await.is_err() {
-                            return
+                            return;
                         }
                     }
                     let frame = match ForwarderFrame::parse(in_packet.as_ref()) {
@@ -198,11 +201,13 @@ impl UDPServer {
         server_info_from_peer(&self.peer_manager).await
     }
     pub async fn server_info_stream(&self) -> ServerInfoStream {
-        let stream = self
-            .info_sender
-            .subscribe()
-            .take_while(|info| future::ready(info.is_ok()))
-            .map(|info| info.unwrap());
+        let mut sub = self.info_sender.subscribe();
+
+        let stream = stream! {
+            while let Ok(i) = sub.recv().await {
+                yield i;
+            }
+        };
 
         stream::once(future::ready(self.server_info().await))
             .chain(stream)

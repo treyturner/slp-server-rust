@@ -9,12 +9,10 @@ mod slp;
 mod test;
 mod util;
 
-use async_graphql::{
-    http::{playground_source, GQLResponse, GraphQLPlaygroundConfig},
-    QueryBuilder,
-};
+use async_graphql::http::{playground_source, GraphQLPlaygroundConfig};
+use async_graphql_warp::{graphql_subscription, Response};
 use env_logger::Env;
-use graphql::{schema, Ctx};
+use graphql::{schema, Ctx, RootSchema};
 use serde::Serialize;
 use slp::UDPServerBuilder;
 use std::convert::Infallible;
@@ -105,10 +103,11 @@ async fn main() -> std::io::Result<()> {
     if opt.block_rules.len() > 0 {
         log::info!("Applying {} rules", opt.block_rules.len());
         log::debug!("rules: {:?}", opt.block_rules);
-        udp_server.get_plugin(
-            &plugin::blocker::BLOCKER_TYPE,
-            |b| b.map(|b| b.set_block_rules(opt.block_rules.clone()))
-        ).await;
+        udp_server
+            .get_plugin(&plugin::blocker::BLOCKER_TYPE, |b| {
+                b.map(|b| b.set_block_rules(opt.block_rules.clone()))
+            })
+            .await;
     }
 
     let context = Ctx::new(udp_server, opt.admin_token);
@@ -116,15 +115,11 @@ async fn main() -> std::io::Result<()> {
     log::info!("Listening on {}", bind_address);
 
     let graphql_filter = async_graphql_warp::graphql(schema(&context)).and_then(
-        |(schema, builder): (_, QueryBuilder)| async move {
-            // 执行查询
-            let resp = builder.execute(&schema).await;
-
-            // 返回结果
-            Ok::<_, Infallible>(warp::reply::json(&GQLResponse(resp)))
+        |(schema, request): (RootSchema, async_graphql::Request)| async move {
+            Ok::<_, Infallible>(Response::from(schema.execute(request).await))
         },
     );
-    let graphql_ws_filter = async_graphql_warp::graphql_subscription(schema(&context));
+    let graphql_ws_filter = graphql_subscription(schema(&context));
 
     let cors = warp::cors()
         .allow_headers(vec!["content-type", "x-apollo-tracing"])

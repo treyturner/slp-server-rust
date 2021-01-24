@@ -2,6 +2,7 @@ use crate::slp::plugin::*;
 use crate::slp::spawn_stream;
 use crate::util::FilterSameExt;
 use async_graphql::SimpleObject;
+use async_stream::stream;
 use futures::prelude::*;
 use futures::{future, stream::BoxStream};
 use serde::Serialize;
@@ -9,8 +10,7 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
 
 /// Traffic infomation
-#[SimpleObject]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(SimpleObject, Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct TrafficInfo {
     /// upload bytes last second
     upload: i32,
@@ -95,11 +95,15 @@ impl Traffic {
         self.0.traffic_info().await
     }
     pub async fn traffic_info_stream(&self) -> TrafficInfoStream {
-        let stream = self
-            .1
-            .subscribe()
-            .take_while(|info| future::ready(info.is_ok()))
-            .map(|info| info.unwrap());
+        let mut sub = self.1.subscribe();
+
+        // .take_while(|info| future::ready(info.is_ok()))
+        // .map(|info| info.unwrap());
+        let stream = stream! {
+            while let Ok(i) = sub.recv().await {
+                yield(i)
+            }
+        };
 
         stream::once(future::ready(self.traffic_info().await))
             .chain(stream)
